@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Reloj de Asistencia</title>
+<meta name="theme-color" content="#1f5f8b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Asistencia">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icono-192.png">
+<link rel="apple-touch-icon" href="icono-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Reloj de Asistencia</h1>
+      <div class="date" id="hoy"></div>
+    </div>
+    <div class="clock" id="reloj">--:--:--</div>
+  </header>
+
+  <div class="banner" id="sinConfig" hidden>Falta configurar la base de datos. Pega la URL y la clave de Supabase en el archivo <b>config.js</b>.</div>
+
+  <form class="card" id="form" novalidate>
+    <div class="row2">
+      <label for="nombre"><span>Nombre <span class="req">· obligatorio</span></span>
+        <input id="nombre" autocomplete="given-name" autocapitalize="words" required>
+      </label>
+      <label for="apellido"><span>Apellido <span class="req">· obligatorio</span></span>
+        <input id="apellido" autocomplete="family-name" autocapitalize="words" required>
+      </label>
+    </div>
+    <label for="empresa"><span>Empresa donde trabaja hoy <span class="req">· obligatorio</span></span>
+      <input id="empresa" list="empresas" autocomplete="organization" autocapitalize="words" required placeholder="Escribe o elige de la lista">
+      <datalist id="empresas"></datalist>
+    </label>
+    <button class="btn-in" id="btnIn" type="submit">Marcar entrada</button>
+    <div class="msg" id="msg" hidden></div>
+    <div class="note">La hora la pone el servidor, no el celular. Cambiar la hora del teléfono no cambia el registro.</div>
+  </form>
+
+  <section>
+    <h2>En turno ahora <span class="n" id="nDentro">0</span></h2>
+    <input id="buscar" type="search" placeholder="Buscar mi nombre" aria-label="Buscar en la lista" hidden>
+    <div class="list" id="dentro"><div class="empty">Cargando…</div></div>
+    <div class="note" id="estado"></div>
+  </section>
+
+  <div class="foot"><a href="admin.html">Panel de reportes</a></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="comun.js"></script>
+<script>
+(function(){
+  const A=window.Asistencia,$=id=>document.getElementById(id);
+  let dentro=[],pendiente={};
+
+  function tick(){const t=A.ahora();$("reloj").textContent=A.horaSeg(t);$("hoy").textContent=A.fechaLarga(t);}
+  tick();setInterval(tick,1000);
+
+  if(!A.listo){$("sinConfig").hidden=false;$("btnIn").disabled=true;$("dentro").innerHTML='<div class="empty">Sin conexión a la base de datos.</div>';return;}
+
+  async function cargar(){
+    const [t,e]=await Promise.all([A.sb.rpc("en_turno"),A.sb.rpc("empresas")]);
+    if(t.error){$("estado").textContent="No se pudo cargar la lista. Revisa tu conexión a internet.";return;}
+    $("estado").textContent="";
+    dentro=t.data||[];
+    if(!e.error)$("empresas").innerHTML=(e.data||[]).map(x=>`<option value="${A.esc(x)}"></option>`).join("");
+    render();
+  }
+
+  function render(){
+    $("nDentro").textContent=dentro.length;
+    $("buscar").hidden=dentro.length<8;
+    const q=A.norm($("buscar").value||"");
+    const lista=dentro.filter(r=>!q||A.norm(r.nombre+" "+r.apellido+" "+r.empresa).includes(q));
+    const L=$("dentro"),hoy=A.diaDe(A.ahora());
+    if(!dentro.length){L.innerHTML='<div class="empty">Nadie en turno. Cuando alguien marque entrada aparecerá aquí con su botón de salida.</div>';return;}
+    if(!lista.length){L.innerHTML='<div class="empty">Nadie con ese nombre en turno.</div>';return;}
+    L.innerHTML=lista.map(r=>`<div class="person"><div class="who"><div class="name">${A.esc(r.nombre)} ${A.esc(r.apellido)} <span class="co">${A.esc(r.empresa)}</span></div>
+      <div class="meta">Entrada <span class="time">${A.hora(r.entrada)}</span>${r.dia!==hoy?" del "+A.esc(r.dia):""} · ${A.dur(A.ahora()-Date.parse(r.entrada))}</div></div>
+      <button class="btn-out" type="button" data-id="${A.esc(r.id)}">Marcar salida</button></div>`).join("");
+    L.querySelectorAll("[data-id]").forEach(b=>b.addEventListener("click",()=>salida(b.dataset.id,b)));
+  }
+  $("buscar").addEventListener("input",render);
+
+  $("form").addEventListener("submit",async ev=>{
+    ev.preventDefault();
+    const nI=$("nombre"),aI=$("apellido"),eI=$("empresa"),msg=$("msg");
+    const n=A.limpiar(nI.value),a=A.limpiar(aI.value),emp=eI.value.replace(/\s+/g," ").trim();
+    const okN=A.validoNombre(n),okA=A.validoNombre(a),okE=A.validoEmpresa(emp);
+    nI.setAttribute("aria-invalid",String(!okN));aI.setAttribute("aria-invalid",String(!okA));eI.setAttribute("aria-invalid",String(!okE));
+    if(!okN||!okA){A.mensaje(msg,"err","Escribe nombre y apellido completos (solo letras, mínimo 2).");(!okN?nI:aI).focus();return;}
+    if(!okE){A.mensaje(msg,"err","Escribe el nombre de la empresa donde te toca trabajar hoy.");eI.focus();return;}
+    const btn=$("btnIn");btn.disabled=true;btn.textContent="Registrando…";
+    try{
+      const {data,error}=await A.sb.rpc("marcar_entrada",{p_nombre:n,p_apellido:a,p_empresa:emp});
+      if(error)throw error;
+      if(!data.ok){
+        if(data.error==="abierta"){const r=data.registro;A.mensaje(msg,"warn",`${r.nombre} ${r.apellido} ya tiene una entrada abierta desde las ${A.hora(r.entrada)} en ${r.empresa}. Marca su salida en la lista de abajo.`);}
+        else A.mensaje(msg,"err","Revisa los datos e intenta de nuevo.");
+        return;
+      }
+      const r=data.registro;
+      A.mensaje(msg,"ok",`Entrada registrada: ${r.nombre} ${r.apellido} en ${r.empresa} a las ${A.hora(r.entrada)}.`);
+      nI.value="";aI.value="";eI.value="";[nI,aI,eI].forEach(x=>x.removeAttribute("aria-invalid"));
+      cargar();
+    }catch(e){A.mensaje(msg,"err","No se pudo guardar la entrada. Revisa tu conexión a internet e intenta de nuevo.");}
+    finally{btn.disabled=false;btn.textContent="Marcar entrada";}
+  });
+
+  async function salida(id,btn){
+    if(!pendiente[id]){pendiente[id]=setTimeout(()=>{delete pendiente[id];btn.classList.remove("confirm");btn.textContent="Marcar salida";},4000);
+      btn.classList.add("confirm");btn.textContent="Tocar otra vez para confirmar";return;}
+    clearTimeout(pendiente[id]);delete pendiente[id];
+    btn.disabled=true;btn.textContent="Registrando…";
+    const msg=$("msg");
+    try{
+      const {data,error}=await A.sb.rpc("marcar_salida",{p_id:id});
+      if(error)throw error;
+      if(!data.ok){A.mensaje(msg,"warn","Esa entrada ya tenía salida registrada.");cargar();return;}
+      const r=data.registro;
+      A.mensaje(msg,"ok",`Salida registrada: ${r.nombre} ${r.apellido} a las ${A.hora(r.salida)} · ${A.dur(Date.parse(r.salida)-Date.parse(r.entrada))}.`);
+      msg.scrollIntoView({behavior:"smooth",block:"nearest"});
+      cargar();
+    }catch(e){btn.disabled=false;btn.textContent="Marcar salida";A.mensaje(msg,"err","No se pudo guardar la salida. Revisa tu conexión e intenta de nuevo.");}
+  }
+
+  A.sincronizar().then(tick);
+  cargar();
+  setInterval(cargar,30000);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden){A.sincronizar();cargar();}});
+})();
+</script>
+</body>
+</html>

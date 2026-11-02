@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Panel de Asistencia</title>
+<meta name="theme-color" content="#1f5f8b">
+<meta name="robots" content="noindex">
+<link rel="icon" href="icono-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="estilos.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Panel de Asistencia</h1>
+      <div class="date">Bitácora y reportes en Excel</div>
+    </div>
+    <button class="btn-ghost" id="btnSalir" type="button" hidden>Cerrar panel</button>
+  </header>
+
+  <div class="banner" id="sinConfig" hidden>Falta configurar la base de datos. Pega la URL y la clave de Supabase en el archivo <b>config.js</b>.</div>
+
+  <form class="card" id="login" novalidate>
+    <label for="pin">PIN de administrador
+      <input id="pin" type="password" inputmode="text" autocomplete="current-password" required>
+    </label>
+    <button class="btn-main" type="submit" id="btnEntrar">Entrar</button>
+    <div class="msg" id="msgLogin" hidden></div>
+  </form>
+
+  <div id="panel" hidden style="display:flex;flex-direction:column;gap:22px">
+    <section>
+      <div class="toolbar">
+        <h2>Bitácora <span class="n" id="nDia">0</span></h2>
+        <div class="filters">
+          <input type="date" id="fecha" aria-label="Fecha">
+          <select id="filtroEmpresa" aria-label="Filtrar por empresa"><option value="">Todas las empresas</option></select>
+          <button class="btn-ghost" id="btnRecargar" type="button">Actualizar</button>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat"><b id="sPersonas">0</b><span>Personas</span></div>
+        <div class="stat"><b id="sTurno">0</b><span>Sin salida</span></div>
+        <div class="stat"><b id="sHoras">0</b><span>Horas</span></div>
+      </div>
+      <div id="bitacora"></div>
+    </section>
+
+    <section>
+      <h2>Reportes en Excel</h2>
+      <div class="reports">
+        <div class="rep"><b>Reporte diario</b><span class="meta" id="repDiaInfo">—</span>
+          <button class="btn-main" id="btnDia" type="button">Descargar día (.xlsx)</button></div>
+        <div class="rep"><b>Reporte semanal</b><span class="meta" id="repSemInfo">—</span>
+          <button class="btn-main" id="btnSem" type="button">Descargar semana (.xlsx)</button></div>
+      </div>
+      <div class="note">Usan la fecha y la empresa elegidas arriba. La semana va de lunes a domingo.</div>
+      <div class="msg" id="msgRep" hidden></div>
+    </section>
+
+    <section>
+      <h2>Cambiar PIN</h2>
+      <form class="card" id="formPin" novalidate>
+        <div class="row2">
+          <label for="pinActual">PIN actual<input id="pinActual" type="password" autocomplete="current-password"></label>
+          <label for="pinNuevo">PIN nuevo (mínimo 6)<input id="pinNuevo" type="password" autocomplete="new-password"></label>
+        </div>
+        <button class="btn-ghost" type="submit">Guardar PIN nuevo</button>
+        <div class="msg" id="msgPin" hidden></div>
+      </form>
+    </section>
+  </div>
+
+  <div class="foot"><a href="./">Volver a marcar asistencia</a></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="comun.js"></script>
+<script>
+(function(){
+  const A=window.Asistencia,$=id=>document.getElementById(id);
+  const DIAS=["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];
+  let pin="",semana=[],registros=[];
+
+  const parseDia=s=>{const [y,m,d]=s.split("-").map(Number);return new Date(Date.UTC(y,m-1,d));};
+  const fmtD=d=>d.toISOString().slice(0,10);
+  function semanaDe(s){const d=parseDia(s),w=(d.getUTCDay()+6)%7;d.setUTCDate(d.getUTCDate()-w);
+    return Array.from({length:7},(_,i)=>{const x=new Date(d);x.setUTCDate(d.getUTCDate()+i);return fmtD(x);});}
+  const fechaCorta=s=>parseDia(s).toLocaleDateString("es-GT",{timeZone:"UTC",day:"numeric",month:"short",year:"numeric"});
+  const diaSemana=s=>DIAS[(parseDia(s).getUTCDay()+6)%7];
+
+  if(!A.listo){$("sinConfig").hidden=false;$("login").hidden=true;return;}
+  $("fecha").value=A.diaDe(Date.now());
+
+  async function traer(semanaDias){
+    const {data,error}=await A.sb.rpc("reporte",{p_pin:pin,p_desde:semanaDias[0],p_hasta:semanaDias[6]});
+    if(error)throw error;
+    return data||[];
+  }
+
+  $("login").addEventListener("submit",async e=>{
+    e.preventDefault();
+    const p=$("pin").value;if(!p){A.mensaje($("msgLogin"),"err","Escribe el PIN.");return;}
+    $("btnEntrar").disabled=true;
+    pin=p;
+    try{await cargar();
+      try{sessionStorage.setItem("asis_pin",p);}catch(_){}
+      $("login").hidden=true;$("panel").hidden=false;$("btnSalir").hidden=false;$("pin").value="";
+    }catch(err){pin="";A.mensaje($("msgLogin"),"err",/PIN/i.test(err.message||"")?"PIN incorrecto.":"No se pudo conectar. Revisa tu internet e intenta de nuevo.");}
+    finally{$("btnEntrar").disabled=false;}
+  });
+  $("btnSalir").addEventListener("click",()=>{pin="";try{sessionStorage.removeItem("asis_pin");}catch(_){}location.reload();});
+
+  async function cargar(){
+    semana=semanaDe($("fecha").value);
+    registros=await traer(semana);
+    render();
+  }
+  $("fecha").addEventListener("change",()=>{if(!semana.includes($("fecha").value))cargar().catch(()=>A.mensaje($("msgRep"),"err","No se pudo cargar la fecha."));else render();});
+  $("filtroEmpresa").addEventListener("change",render);
+  $("btnRecargar").addEventListener("click",()=>cargar().catch(()=>A.mensaje($("msgRep"),"err","No se pudo actualizar.")));
+
+  const filtro=()=>$("filtroEmpresa").value;
+  const pasa=r=>!filtro()||A.norm(r.empresa)===A.norm(filtro());
+  const durMs=r=>r.salida?Date.parse(r.salida)-Date.parse(r.entrada):0;
+
+  function render(){
+    const emps=[...new Map(registros.map(r=>[A.norm(r.empresa),r.empresa])).values()].sort((a,b)=>a.localeCompare(b,"es"));
+    const sel=$("filtroEmpresa"),cur=sel.value;
+    sel.innerHTML='<option value="">Todas las empresas</option>'+emps.map(x=>`<option value="${A.esc(x)}">${A.esc(x)}</option>`).join("");
+    sel.value=emps.includes(cur)?cur:"";
+
+    const f=$("fecha").value;
+    const dia=registros.filter(r=>r.dia===f&&pasa(r));
+    $("nDia").textContent=dia.length;
+    $("sPersonas").textContent=new Set(dia.map(r=>r.clave)).size;
+    $("sTurno").textContent=dia.filter(r=>!r.salida).length;
+    $("sHoras").textContent=A.horas(dia.reduce((s,r)=>s+durMs(r),0)).toLocaleString("es-GT");
+
+    $("bitacora").innerHTML=!dia.length?'<div class="empty">Sin registros para esta fecha'+(filtro()?" en "+A.esc(filtro()):"")+'.</div>':
+      '<div class="log"><div class="logrow head"><span>Persona</span><span>Entrada</span><span>Salida</span><span class="dur">Tiempo</span></div>'+
+      dia.map(r=>`<div class="logrow"><div class="cell"><span class="name">${A.esc(r.nombre)} ${A.esc(r.apellido)}</span><span class="co">${A.esc(r.empresa)}</span></div>
+        <div class="cell"><span class="time">${A.hora(r.entrada)}</span></div>
+        <div class="cell">${r.salida?`<span class="time">${A.hora(r.salida)}</span>${A.diaDe(r.salida)!==r.dia?'<span class="meta">'+A.esc(A.diaDe(r.salida))+'</span>':""}`:'<span class="open">sin salida</span>'}</div>
+        <div class="cell dur"><span class="time">${r.salida?A.dur(durMs(r)):"—"}</span></div></div>`).join("")+'</div>';
+
+    const emp=filtro()?" · "+filtro():"";
+    $("repDiaInfo").textContent=fechaCorta(f)+emp+" · "+dia.length+" registro"+(dia.length===1?"":"s");
+    const nSem=registros.filter(pasa).length;
+    $("repSemInfo").textContent=fechaCorta(semana[0])+" al "+fechaCorta(semana[6])+emp+" · "+nSem+" registro"+(nSem===1?"":"s");
+  }
+
+  // ---------- Excel ----------
+  function filaDetalle(r){
+    return {"Fecha":r.dia,"Día":diaSemana(r.dia),"Nombre":r.nombre,"Apellido":r.apellido,"Empresa":r.empresa,
+      "Entrada":A.hora(r.entrada),"Salida":r.salida?A.hora(r.salida):"Sin salida",
+      "Fecha salida":r.salida?A.diaDe(r.salida):"","Horas":r.salida?A.horas(durMs(r)):""};
+  }
+  const anchoDet=[11,10,16,16,24,8,10,12,7].map(w=>({wch:w}));
+  function hoja(filas,cols,titulo){
+    const ws=XLSX.utils.aoa_to_sheet([[titulo],["Horas tomadas del servidor (hora de Guatemala)"]]);
+    XLSX.utils.sheet_add_json(ws,filas,{origin:"A4"});ws["!cols"]=cols;return ws;
+  }
+  const suf=()=>filtro()?"-"+A.norm(filtro()).replace(/[^a-z0-9]+/g,"-"):"";
+  function bajar(wb,nombre){try{XLSX.writeFile(wb,nombre);A.mensaje($("msgRep"),"ok","Reporte descargado: "+nombre);}catch(e){A.mensaje($("msgRep"),"err","No se pudo generar el archivo.");}}
+
+  $("btnDia").addEventListener("click",()=>{
+    const f=$("fecha").value;
+    const dia=registros.filter(r=>r.dia===f&&pasa(r)).sort((a,b)=>a.empresa.localeCompare(b.empresa,"es")||a.entrada.localeCompare(b.entrada));
+    if(!dia.length){A.mensaje($("msgRep"),"warn","No hay registros el "+fechaCorta(f)+".");return;}
+    const titulo="Reporte diario · "+diaSemana(f)+" "+fechaCorta(f)+(filtro()?" · "+filtro():"");
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,hoja(dia.map(filaDetalle),anchoDet,titulo),"Detalle");
+    const por={};
+    for(const r of dia){const e=r.empresa;por[e]=por[e]||{"Empresa":e,"Marcas":0,"Personas":new Set(),"Con salida":0,"Sin salida":0,"Horas totales":0};
+      const p=por[e];p.Marcas++;p.Personas.add(r.clave);if(r.salida){p["Con salida"]++;p["Horas totales"]=Math.round((p["Horas totales"]+A.horas(durMs(r)))*100)/100;}else p["Sin salida"]++;}
+    const filas=Object.values(por).map(p=>({...p,"Personas":p.Personas.size}));
+    XLSX.utils.book_append_sheet(wb,hoja(filas,[24,8,10,11,11,13].map(w=>({wch:w})),titulo),"Por empresa");
+    bajar(wb,"reporte-diario-"+f+suf()+".xlsx");
+  });
+
+  $("btnSem").addEventListener("click",()=>{
+    const regs=registros.filter(pasa).sort((a,b)=>a.entrada.localeCompare(b.entrada));
+    if(!regs.length){A.mensaje($("msgRep"),"warn","No hay registros en la semana del "+fechaCorta(semana[0])+" al "+fechaCorta(semana[6])+".");return;}
+    const titulo="Reporte semanal · "+fechaCorta(semana[0])+" al "+fechaCorta(semana[6])+(filtro()?" · "+filtro():"");
+    const res={};
+    for(const r of regs){const k=r.clave+"|"+A.norm(r.empresa);
+      if(!res[k]){res[k]={"Nombre":r.nombre,"Apellido":r.apellido,"Empresa":r.empresa};DIAS.forEach(d=>res[k][d]=0);
+        Object.assign(res[k],{"Días trabajados":0,"Total horas":0,"Marcas sin salida":0,_d:new Set()});}
+      const f=res[k],d=diaSemana(r.dia);f._d.add(r.dia);
+      if(r.salida){const h=A.horas(durMs(r));f[d]=Math.round((f[d]+h)*100)/100;f["Total horas"]=Math.round((f["Total horas"]+h)*100)/100;}else f["Marcas sin salida"]++;}
+    const filas=Object.values(res).map(f=>{f["Días trabajados"]=f._d.size;delete f._d;DIAS.forEach(d=>{if(!f[d])f[d]="";});return f;})
+      .sort((a,b)=>(a.Apellido+" "+a.Nombre).localeCompare(b.Apellido+" "+b.Nombre,"es")||a.Empresa.localeCompare(b.Empresa,"es"));
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,hoja(filas,[16,16,24,8,8,10,8,8,8,9,14,11,16].map(w=>({wch:w})),titulo),"Resumen semanal");
+    XLSX.utils.book_append_sheet(wb,hoja(regs.map(filaDetalle),anchoDet,titulo),"Detalle");
+    bajar(wb,"reporte-semanal-"+semana[0]+"-al-"+semana[6]+suf()+".xlsx");
+  });
+
+  $("formPin").addEventListener("submit",async e=>{
+    e.preventDefault();
+    const act=$("pinActual").value,nue=$("pinNuevo").value,m=$("msgPin");
+    if(nue.length<6){A.mensaje(m,"err","El PIN nuevo debe tener al menos 6 caracteres.");return;}
+    const {error}=await A.sb.rpc("cambiar_pin",{p_actual:act,p_nuevo:nue});
+    if(error){A.mensaje(m,"err",/PIN incorrecto/.test(error.message)?"El PIN actual no es correcto.":"No se pudo cambiar el PIN.");return;}
+    pin=nue;try{sessionStorage.setItem("asis_pin",nue);}catch(_){}
+    $("pinActual").value="";$("pinNuevo").value="";A.mensaje(m,"ok","PIN actualizado.");
+  });
+
+  // Reabrir sesión dentro de la misma pestaña
+  let guardado="";try{guardado=sessionStorage.getItem("asis_pin")||"";}catch(_){}
+  if(guardado){$("pin").value=guardado;$("login").requestSubmit();}
+})();
+</script>
+</body>
+</html>
