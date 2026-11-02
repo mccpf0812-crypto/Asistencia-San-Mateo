@@ -138,7 +138,7 @@
     const L=$("abiertos"),lista=data||[];
     $("nAbiertos").textContent=lista.length;
     if(!lista.length){L.innerHTML='<div class="empty">Todos los turnos tienen salida.</div>';return;}
-    L.innerHTML=lista.map(r=>`<div class="person"><div class="who"><div class="name">${A.esc(r.nombre)} ${A.esc(r.apellido)} <span class="co">${A.esc(r.empresa)}</span></div>
+    L.innerHTML=lista.map(r=>`<div class="person"><div class="who"><div class="name">${A.esc(r.nombre)} ${A.esc(r.apellido)} <span class="co">${A.esc(r.empresa)}</span>${r.bloqueado?' <span class="chip-m">bloqueado por código</span>':""}</div>
       <div class="meta">Entrada ${A.esc(fechaCorta(r.dia))} · <span class="time">${A.hora(r.entrada)}</span> · hace ${A.dur(A.ahora()-Date.parse(r.entrada))}</div></div>
       <button class="btn-ghost" type="button" data-abrir="${A.esc(r.id)}">Cerrar turno</button>
       <form class="cerrar" data-form="${A.esc(r.id)}" hidden>

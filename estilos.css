@@ -81,3 +81,8 @@ section{display:flex;flex-direction:column;gap:10px}
 .chip-m{display:inline-block;font-size:.7rem;font-weight:600;color:var(--warn);background:var(--warn-bg);border-radius:999px;padding:0 7px}
 .pasos{margin:0;padding-left:1.3em;font-size:.85rem;color:var(--muted);display:flex;flex-direction:column;gap:2px}
 .pasos b{color:var(--ink)}
+.hint{font-size:.78rem;text-transform:none;letter-spacing:0;font-weight:400;color:var(--muted)}
+#codigo{max-width:9em;letter-spacing:.3em;font-family:var(--f-mono)}
+.salform{flex:1 1 100%;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.salform label{flex:0 1 12em}
+.salform input{letter-spacing:.3em;font-family:var(--f-mono);padding:9px 10px}
