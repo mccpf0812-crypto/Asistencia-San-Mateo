@@ -43,14 +43,18 @@
     </label>
     <button class="btn-in" id="btnIn" type="submit">Marcar entrada</button>
     <div class="msg" id="msg" hidden></div>
-    <div class="note">La hora la pone el servidor, no el celular. Cambiar la hora del teléfono no cambia el registro.</div>
+    <ol class="pasos">
+      <li>Escribe tu nombre, tu apellido y la empresa donde trabajas hoy.</li>
+      <li>Toca <b>Marcar entrada</b> al llegar.</li>
+      <li>Al terminar tu turno, abre esta misma página en este mismo celular y toca <b>Marcar salida</b> en "Mis turnos abiertos".</li>
+    </ol>
   </form>
 
   <section>
     <h2>Mis turnos abiertos <span class="n" id="nDentro">0</span></h2>
     <input id="buscar" type="search" placeholder="Buscar mi nombre" aria-label="Buscar en mis turnos" hidden>
     <div class="list" id="dentro"><div class="empty">Cargando…</div></div>
-    <div class="note">Aquí solo aparecen las entradas marcadas desde este celular. La salida se marca desde el mismo celular y el mismo navegador donde marcaste la entrada.</div>
+    <div class="note">Aquí aparecen las entradas marcadas desde este celular.</div>
     <div class="note" id="estado"></div>
   </section>
 
