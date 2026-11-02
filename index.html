@@ -30,12 +30,13 @@
   <form class="card" id="form" novalidate>
     <div class="row2">
       <label for="nombre"><span>Nombre <span class="req">· obligatorio</span></span>
-        <input id="nombre" autocomplete="given-name" autocapitalize="words" required>
+        <input id="nombre" autocomplete="off" autocapitalize="words" required>
       </label>
       <label for="apellido"><span>Apellido <span class="req">· obligatorio</span></span>
-        <input id="apellido" autocomplete="family-name" autocapitalize="words" required>
+        <input id="apellido" autocomplete="off" autocapitalize="words" required>
       </label>
     </div>
+    <div class="sugs" id="sugs" hidden aria-live="polite"></div>
     <label for="empresa"><span>Empresa donde trabaja hoy <span class="req">· obligatorio</span></span>
       <input id="empresa" list="empresas" autocomplete="organization" autocapitalize="words" required placeholder="Escribe o elige de la lista">
       <datalist id="empresas"></datalist>
@@ -61,7 +62,24 @@
 <script>
 (function(){
   const A=window.Asistencia,$=id=>document.getElementById(id);
-  let dentro=[],pendiente={};
+  let dentro=[],pendiente={},personas=[];
+
+  // Sugerencias de personas ya registradas: cada palabra escrita debe ser el inicio de una palabra del nombre.
+  function sugerir(){
+    const box=$("sugs"),q=A.norm($("nombre").value+" "+$("apellido").value);
+    const toks=q.split(" ").filter(Boolean);
+    if(!toks.length||q.replace(/ /g,"").length<2){box.hidden=true;box.innerHTML="";return;}
+    const hits=personas.filter(p=>{const w=p.k.split(" ");return toks.every(t=>w.some(x=>x.startsWith(t)));});
+    const exacta=hits.length===1&&hits[0].k===q;
+    if(!hits.length||exacta){box.hidden=true;box.innerHTML="";return;}
+    box.innerHTML='<span class="meta">¿Eres…?</span>'+hits.slice(0,5).map((p,i)=>`<button type="button" class="sug" data-i="${personas.indexOf(p)}">${A.esc(p.nombre)} ${A.esc(p.apellido)}</button>`).join("");
+    box.hidden=false;
+    box.querySelectorAll(".sug").forEach(b=>b.addEventListener("click",()=>{const p=personas[+b.dataset.i];
+      $("nombre").value=p.nombre;$("apellido").value=p.apellido;box.hidden=true;box.innerHTML="";
+      ["nombre","apellido"].forEach(id=>$(id).removeAttribute("aria-invalid"));$("empresa").focus();}));
+  }
+  $("nombre").addEventListener("input",sugerir);
+  $("apellido").addEventListener("input",sugerir);
 
   function tick(){const t=A.ahora();$("reloj").textContent=A.horaSeg(t);$("hoy").textContent=A.fechaLarga(t);}
   tick();setInterval(tick,1000);
@@ -69,7 +87,8 @@
   if(!A.listo){$("sinConfig").hidden=false;$("btnIn").disabled=true;$("dentro").innerHTML='<div class="empty">Sin conexión a la base de datos.</div>';return;}
 
   async function cargar(){
-    const [t,e]=await Promise.all([A.sb.rpc("en_turno"),A.sb.rpc("empresas")]);
+    const [t,e,pp]=await Promise.all([A.sb.rpc("en_turno"),A.sb.rpc("empresas"),A.sb.rpc("personas")]);
+    if(!pp.error&&pp.data)personas=pp.data.map(x=>({...x,k:A.norm(x.nombre+" "+x.apellido)}));
     if(t.error){$("estado").textContent="No se pudo cargar la lista. Revisa tu conexión a internet.";return;}
     $("estado").textContent="";
     dentro=t.data||[];
@@ -111,7 +130,7 @@
       }
       const r=data.registro;
       A.mensaje(msg,"ok",`Entrada registrada: ${r.nombre} ${r.apellido} en ${r.empresa} a las ${A.hora(r.entrada)}.`);
-      nI.value="";aI.value="";eI.value="";[nI,aI,eI].forEach(x=>x.removeAttribute("aria-invalid"));
+      nI.value="";aI.value="";eI.value="";[nI,aI,eI].forEach(x=>x.removeAttribute("aria-invalid"));sugerir();
       cargar();
     }catch(e){A.mensaje(msg,"err","No se pudo guardar la entrada. Revisa tu conexión a internet e intenta de nuevo.");}
     finally{btn.disabled=false;btn.textContent="Marcar entrada";}

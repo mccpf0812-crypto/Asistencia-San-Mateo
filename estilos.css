@@ -73,3 +73,5 @@ section{display:flex;flex-direction:column;gap:10px}
 .rep b{font-family:var(--f-display);font-size:1.02rem}
 .rep .btn-main{margin-top:auto}
 .banner{background:var(--warn-bg);color:var(--warn);border-radius:12px;padding:14px;font-size:.95rem}
+.sugs{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:-4px}
+.sug{background:var(--accent-bg);color:var(--accent);border:1.5px solid color-mix(in srgb,var(--accent) 35%,transparent);font-weight:600;padding:8px 12px;font-size:.95rem;overflow-wrap:anywhere;text-align:left}

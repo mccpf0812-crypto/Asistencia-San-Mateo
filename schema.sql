@@ -61,6 +61,8 @@ declare
   v_empresa  text := regexp_replace(trim(coalesce(p_empresa,'')),  '\s+', ' ', 'g');
   v_clave    text;
   v_exist    text;
+  v_n2       text;
+  v_a2       text;
   r          public.registros;
 begin
   if char_length(v_nombre) < 2 or char_length(v_apellido) < 2 then
@@ -76,6 +78,11 @@ begin
   if v_exist is not null then v_empresa := v_exist; end if;
 
   v_clave := normalizar(v_nombre || ' ' || v_apellido);
+
+  -- Reutiliza la forma ya escrita del nombre (evita "jose lopez" vs "José López").
+  select nombre, apellido into v_n2, v_a2 from public.registros
+   where clave = v_clave order by entrada desc limit 1;
+  if found then v_nombre := v_n2; v_apellido := v_a2; end if;
 
   select * into r from public.registros where clave = v_clave and salida is null;
   if found then
@@ -126,6 +133,17 @@ returns setof text language sql stable security definer set search_path = public
   ) t order by empresa limit 300
 $$;
 
+-- Personas ya registradas (para sugerir el nombre al escribir).
+create or replace function public.personas()
+returns table (nombre text, apellido text)
+language sql stable security definer set search_path = public as $$
+  select nombre, apellido from (
+    select distinct on (clave) clave, nombre, apellido
+      from public.registros
+     order by clave, entrada desc
+  ) t order by apellido, nombre limit 3000
+$$;
+
 -- Reportes: solo con el PIN del administrador.
 create or replace function public.reporte(p_pin text, p_desde date, p_hasta date)
 returns setof public.registros language plpgsql stable security definer set search_path = public, extensions as $$
@@ -155,8 +173,8 @@ begin
 end $$;
 
 revoke all on function public.marcar_entrada(text,text,text), public.marcar_salida(uuid),
-  public.en_turno(), public.empresas(), public.reporte(text,date,date),
+  public.en_turno(), public.empresas(), public.personas(), public.reporte(text,date,date),
   public.cambiar_pin(text,text), public.hora_servidor() from public;
 grant execute on function public.marcar_entrada(text,text,text), public.marcar_salida(uuid),
-  public.en_turno(), public.empresas(), public.reporte(text,date,date),
+  public.en_turno(), public.empresas(), public.personas(), public.reporte(text,date,date),
   public.cambiar_pin(text,text), public.hora_servidor() to anon, authenticated;
