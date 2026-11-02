@@ -42,6 +42,7 @@ values (1, extensions.crypt('CAMBIA_ESTE_PIN', extensions.gen_salt('bf')))
 on conflict (id) do nothing;
 
 -- ---------- Funciones ----------
+-- ---------- Funciones ----------
 create or replace function public.normalizar(t text) returns text
 language sql immutable as $$
   select regexp_replace(
@@ -52,7 +53,57 @@ $$;
 create or replace function public.hora_servidor() returns timestamptz
 language sql stable as $$ select now() $$;
 
--- Marcar entrada: la hora la pone el servidor.
+-- Lista de empresas ya usadas (para sugerencias).
+create or replace function public.empresas()
+returns setof text language sql stable security definer set search_path = public as $$
+  select empresa from (
+    select distinct on (normalizar(empresa)) empresa
+      from public.registros
+     order by normalizar(empresa), entrada desc
+  ) t order by empresa limit 300
+$$;
+
+-- Personas ya registradas (para sugerir el nombre al escribir).
+create or replace function public.personas()
+returns table (nombre text, apellido text)
+language sql stable security definer set search_path = public as $$
+  select nombre, apellido from (
+    select distinct on (clave) clave, nombre, apellido
+      from public.registros
+     order by clave, entrada desc
+  ) t order by apellido, nombre limit 3000
+$$;
+
+-- Cambiar el PIN desde el panel.
+create or replace function public.cambiar_pin(p_actual text, p_nuevo text)
+returns boolean language plpgsql security definer set search_path = public, extensions as $$
+begin
+  if char_length(coalesce(p_nuevo,'')) < 6 then
+    raise exception 'El PIN nuevo debe tener al menos 6 caracteres' using errcode = '22023';
+  end if;
+  update public.config set pin_hash = crypt(p_nuevo, gen_salt('bf'))
+   where id = 1 and pin_hash = crypt(coalesce(p_actual,''), pin_hash);
+  if not found then raise exception 'PIN incorrecto' using errcode = '28000'; end if;
+  return true;
+end $$;
+
+alter table public.registros add column if not exists token_hash    text;
+alter table public.registros add column if not exists salida_manual boolean not null default false;
+
+-- Registro en formato público (sin claves internas).
+create or replace function public.reg_json(r public.registros) returns json
+language sql immutable as $$
+  select json_build_object('id', r.id, 'nombre', r.nombre, 'apellido', r.apellido,
+    'empresa', r.empresa, 'entrada', r.entrada, 'salida', r.salida, 'dia', r.dia,
+    'salida_manual', r.salida_manual)
+$$;
+
+create or replace function public.hash_token(t text) returns text
+language sql immutable set search_path = public, extensions as $$
+  select encode(extensions.digest(coalesce(t,''), 'sha256'), 'hex')
+$$;
+
+-- Marcar entrada: la hora la pone el servidor y devuelve la clave del turno.
 create or replace function public.marcar_entrada(p_nombre text, p_apellido text, p_empresa text)
 returns json language plpgsql security definer set search_path = public, extensions as $$
 declare
@@ -63,6 +114,7 @@ declare
   v_exist    text;
   v_n2       text;
   v_a2       text;
+  v_token    text := encode(extensions.gen_random_bytes(24), 'hex');
   r          public.registros;
 begin
   if char_length(v_nombre) < 2 or char_length(v_apellido) < 2 then
@@ -86,67 +138,72 @@ begin
 
   select * into r from public.registros where clave = v_clave and salida is null;
   if found then
-    return json_build_object('ok', false, 'error', 'abierta', 'registro', row_to_json(r));
+    return json_build_object('ok', false, 'error', 'abierta', 'registro', reg_json(r));
   end if;
 
   begin
-    insert into public.registros (nombre, apellido, clave, empresa)
-    values (v_nombre, v_apellido, v_clave, v_empresa)
+    insert into public.registros (nombre, apellido, clave, empresa, token_hash)
+    values (v_nombre, v_apellido, v_clave, v_empresa, hash_token(v_token))
     returning * into r;
   exception when unique_violation then
     select * into r from public.registros where clave = v_clave and salida is null;
-    return json_build_object('ok', false, 'error', 'abierta', 'registro', row_to_json(r));
+    return json_build_object('ok', false, 'error', 'abierta', 'registro', reg_json(r));
   end;
-  return json_build_object('ok', true, 'registro', row_to_json(r));
+  return json_build_object('ok', true, 'registro', reg_json(r), 'token', v_token);
 end $$;
 
--- Marcar salida: la hora la pone el servidor.
-create or replace function public.marcar_salida(p_id uuid)
+-- Marcar salida: solo con la clave que recibió el celular al marcar la entrada.
+create or replace function public.marcar_salida(p_id uuid, p_token text)
 returns json language plpgsql security definer set search_path = public, extensions as $$
 declare r public.registros;
 begin
   update public.registros set salida = now()
    where id = p_id and salida is null
+     and token_hash is not null and token_hash = hash_token(p_token)
   returning * into r;
   if not found then
     return json_build_object('ok', false, 'error', 'no_abierta');
   end if;
-  return json_build_object('ok', true, 'registro', row_to_json(r));
+  return json_build_object('ok', true, 'registro', reg_json(r));
 end $$;
 
--- Personas en turno ahora (lo que ven los trabajadores).
-create or replace function public.en_turno()
+-- Turnos abiertos de ESTE celular (solo los que tiene clave).
+create or replace function public.mis_turnos(p_tokens text[])
 returns table (id uuid, nombre text, apellido text, empresa text, entrada timestamptz, dia date)
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select id, nombre, apellido, empresa, entrada, dia
-    from public.registros where salida is null
-   order by entrada asc limit 500
+    from public.registros
+   where salida is null
+     and token_hash in (select hash_token(t) from unnest(coalesce(p_tokens[1:50], '{}')) t)
+   order by entrada asc
 $$;
 
--- Lista de empresas ya usadas (para sugerencias).
-create or replace function public.empresas()
-returns setof text language sql stable security definer set search_path = public as $$
-  select empresa from (
-    select distinct on (normalizar(empresa)) empresa
-      from public.registros
-     order by normalizar(empresa), entrada desc
-  ) t order by empresa limit 300
-$$;
+-- Cerrar un turno olvidado desde el panel (con PIN). Queda marcado como manual.
+create or replace function public.cerrar_turno(p_pin text, p_id uuid, p_salida timestamptz)
+returns json language plpgsql security definer set search_path = public, extensions as $$
+declare r public.registros; v_sal timestamptz := coalesce(p_salida, now());
+begin
+  if not exists (select 1 from public.config where pin_hash = crypt(coalesce(p_pin,''), pin_hash)) then
+    raise exception 'PIN incorrecto' using errcode = '28000';
+  end if;
+  if v_sal > now() then
+    raise exception 'La hora de salida no puede ser en el futuro' using errcode = '22023';
+  end if;
+  update public.registros set salida = v_sal, salida_manual = true
+   where id = p_id and salida is null and entrada <= v_sal
+  returning * into r;
+  if not found then
+    raise exception 'No se pudo cerrar: el turno ya estaba cerrado o la salida es antes de la entrada' using errcode = '22023';
+  end if;
+  return reg_json(r);
+end $$;
 
--- Personas ya registradas (para sugerir el nombre al escribir).
-create or replace function public.personas()
-returns table (nombre text, apellido text)
-language sql stable security definer set search_path = public as $$
-  select nombre, apellido from (
-    select distinct on (clave) clave, nombre, apellido
-      from public.registros
-     order by clave, entrada desc
-  ) t order by apellido, nombre limit 3000
-$$;
-
--- Reportes: solo con el PIN del administrador.
+-- Reportes: solo con el PIN del administrador (sin claves internas).
+drop function if exists public.reporte(text, date, date);
 create or replace function public.reporte(p_pin text, p_desde date, p_hasta date)
-returns setof public.registros language plpgsql stable security definer set search_path = public, extensions as $$
+returns table (id uuid, nombre text, apellido text, clave text, empresa text,
+               entrada timestamptz, salida timestamptz, dia date, salida_manual boolean)
+language plpgsql stable security definer set search_path = public, extensions as $$
 begin
   if not exists (select 1 from public.config where pin_hash = crypt(coalesce(p_pin,''), pin_hash)) then
     raise exception 'PIN incorrecto' using errcode = '28000';
@@ -154,27 +211,37 @@ begin
   if p_hasta - p_desde > 62 then
     raise exception 'Rango demasiado grande' using errcode = '22023';
   end if;
-  return query select * from public.registros
-                where dia between p_desde and p_hasta
-                order by entrada asc;
+  return query select r.id, r.nombre, r.apellido, r.clave, r.empresa,
+                      r.entrada, r.salida, r.dia, r.salida_manual
+                 from public.registros r
+                where r.dia between p_desde and p_hasta
+                order by r.entrada asc;
 end $$;
 
--- Cambiar el PIN desde el panel.
-create or replace function public.cambiar_pin(p_actual text, p_nuevo text)
-returns boolean language plpgsql security definer set search_path = public, extensions as $$
+-- Todos los turnos sin salida (para el panel, con PIN).
+create or replace function public.abiertos(p_pin text)
+returns table (id uuid, nombre text, apellido text, clave text, empresa text,
+               entrada timestamptz, salida timestamptz, dia date, salida_manual boolean)
+language plpgsql stable security definer set search_path = public, extensions as $$
 begin
-  if char_length(coalesce(p_nuevo,'')) < 6 then
-    raise exception 'El PIN nuevo debe tener al menos 6 caracteres' using errcode = '22023';
+  if not exists (select 1 from public.config where pin_hash = crypt(coalesce(p_pin,''), pin_hash)) then
+    raise exception 'PIN incorrecto' using errcode = '28000';
   end if;
-  update public.config set pin_hash = crypt(p_nuevo, gen_salt('bf'))
-   where id = 1 and pin_hash = crypt(coalesce(p_actual,''), pin_hash);
-  if not found then raise exception 'PIN incorrecto' using errcode = '28000'; end if;
-  return true;
+  return query select r.id, r.nombre, r.apellido, r.clave, r.empresa,
+                      r.entrada, r.salida, r.dia, r.salida_manual
+                 from public.registros r
+                where r.salida is null
+                order by r.entrada asc limit 500;
 end $$;
 
-revoke all on function public.marcar_entrada(text,text,text), public.marcar_salida(uuid),
-  public.en_turno(), public.empresas(), public.personas(), public.reporte(text,date,date),
+revoke all on function public.marcar_salida(uuid,text), public.mis_turnos(text[]),
+  public.cerrar_turno(text,uuid,timestamptz), public.reporte(text,date,date), public.abiertos(text),
+  public.reg_json(public.registros), public.hash_token(text) from public;
+revoke all on function public.reg_json(public.registros), public.hash_token(text) from anon, authenticated;
+grant execute on function public.marcar_salida(uuid,text), public.mis_turnos(text[]),
+  public.cerrar_turno(text,uuid,timestamptz), public.reporte(text,date,date), public.abiertos(text) to anon, authenticated;
+
+revoke all on function public.marcar_entrada(text,text,text), public.empresas(), public.personas(),
   public.cambiar_pin(text,text), public.hora_servidor() from public;
-grant execute on function public.marcar_entrada(text,text,text), public.marcar_salida(uuid),
-  public.en_turno(), public.empresas(), public.personas(), public.reporte(text,date,date),
+grant execute on function public.marcar_entrada(text,text,text), public.empresas(), public.personas(),
   public.cambiar_pin(text,text), public.hora_servidor() to anon, authenticated;

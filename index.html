@@ -47,9 +47,10 @@
   </form>
 
   <section>
-    <h2>En turno ahora <span class="n" id="nDentro">0</span></h2>
-    <input id="buscar" type="search" placeholder="Buscar mi nombre" aria-label="Buscar en la lista" hidden>
+    <h2>Mis turnos abiertos <span class="n" id="nDentro">0</span></h2>
+    <input id="buscar" type="search" placeholder="Buscar mi nombre" aria-label="Buscar en mis turnos" hidden>
     <div class="list" id="dentro"><div class="empty">Cargando…</div></div>
+    <div class="note">Aquí solo aparecen las entradas marcadas desde este celular. La salida se marca desde el mismo celular y el mismo navegador donde marcaste la entrada.</div>
     <div class="note" id="estado"></div>
   </section>
 
@@ -62,7 +63,13 @@
 <script>
 (function(){
   const A=window.Asistencia,$=id=>document.getElementById(id);
-  let dentro=[],pendiente={},personas=[];
+  const LS="asis_turnos";
+  let dentro=[],pendiente={},personas=[],guardaOk=true;
+
+  // ---------- Turnos guardados en este celular ----------
+  function leerLocal(){try{const v=JSON.parse(localStorage.getItem(LS)||"[]");return Array.isArray(v)?v.filter(x=>x&&x.id&&x.token):[];}catch(e){return [];}}
+  function guardarLocal(l){try{localStorage.setItem(LS,JSON.stringify(l.slice(-50)));guardaOk=true;}catch(e){guardaOk=false;}}
+  function tokenDe(id){const x=leerLocal().find(t=>t.id===id);return x?x.token:null;}
 
   // Sugerencias de personas ya registradas: cada palabra escrita debe ser el inicio de una palabra del nombre.
   function sugerir(){
@@ -72,7 +79,7 @@
     const hits=personas.filter(p=>{const w=p.k.split(" ");return toks.every(t=>w.some(x=>x.startsWith(t)));});
     const exacta=hits.length===1&&hits[0].k===q;
     if(!hits.length||exacta){box.hidden=true;box.innerHTML="";return;}
-    box.innerHTML='<span class="meta">¿Eres…?</span>'+hits.slice(0,5).map((p,i)=>`<button type="button" class="sug" data-i="${personas.indexOf(p)}">${A.esc(p.nombre)} ${A.esc(p.apellido)}</button>`).join("");
+    box.innerHTML='<span class="meta">¿Eres…?</span>'+hits.slice(0,5).map(p=>`<button type="button" class="sug" data-i="${personas.indexOf(p)}">${A.esc(p.nombre)} ${A.esc(p.apellido)}</button>`).join("");
     box.hidden=false;
     box.querySelectorAll(".sug").forEach(b=>b.addEventListener("click",()=>{const p=personas[+b.dataset.i];
       $("nombre").value=p.nombre;$("apellido").value=p.apellido;box.hidden=true;box.innerHTML="";
@@ -87,12 +94,18 @@
   if(!A.listo){$("sinConfig").hidden=false;$("btnIn").disabled=true;$("dentro").innerHTML='<div class="empty">Sin conexión a la base de datos.</div>';return;}
 
   async function cargar(){
-    const [t,e,pp]=await Promise.all([A.sb.rpc("en_turno"),A.sb.rpc("empresas"),A.sb.rpc("personas")]);
+    const loc=leerLocal();
+    const [t,e,pp]=await Promise.all([
+      loc.length?A.sb.rpc("mis_turnos",{p_tokens:loc.map(x=>x.token)}):Promise.resolve({data:[],error:null}),
+      A.sb.rpc("empresas"),A.sb.rpc("personas")]);
     if(!pp.error&&pp.data)personas=pp.data.map(x=>({...x,k:A.norm(x.nombre+" "+x.apellido)}));
-    if(t.error){$("estado").textContent="No se pudo cargar la lista. Revisa tu conexión a internet.";return;}
+    if(!e.error)$("empresas").innerHTML=(e.data||[]).map(x=>`<option value="${A.esc(x)}"></option>`).join("");
+    if(t.error){$("estado").textContent="No se pudo revisar tus turnos. Revisa tu conexión a internet.";dentro=loc;render();return;}
     $("estado").textContent="";
     dentro=t.data||[];
-    if(!e.error)$("empresas").innerHTML=(e.data||[]).map(x=>`<option value="${A.esc(x)}"></option>`).join("");
+    // Olvida en este celular los turnos que ya se cerraron.
+    const abiertos=new Set(dentro.map(r=>r.id));
+    guardarLocal(leerLocal().filter(x=>abiertos.has(x.id)));
     render();
   }
 
@@ -102,10 +115,10 @@
     const q=A.norm($("buscar").value||"");
     const lista=dentro.filter(r=>!q||A.norm(r.nombre+" "+r.apellido+" "+r.empresa).includes(q));
     const L=$("dentro"),hoy=A.diaDe(A.ahora());
-    if(!dentro.length){L.innerHTML='<div class="empty">Nadie en turno. Cuando alguien marque entrada aparecerá aquí con su botón de salida.</div>';return;}
-    if(!lista.length){L.innerHTML='<div class="empty">Nadie con ese nombre en turno.</div>';return;}
+    if(!dentro.length){L.innerHTML='<div class="empty">No hay turnos abiertos en este celular. Cuando marques tu entrada aparecerá aquí con el botón para marcar tu salida.</div>';return;}
+    if(!lista.length){L.innerHTML='<div class="empty">Nadie con ese nombre en este celular.</div>';return;}
     L.innerHTML=lista.map(r=>`<div class="person"><div class="who"><div class="name">${A.esc(r.nombre)} ${A.esc(r.apellido)} <span class="co">${A.esc(r.empresa)}</span></div>
-      <div class="meta">Entrada <span class="time">${A.hora(r.entrada)}</span>${r.dia!==hoy?" del "+A.esc(r.dia):""} · ${A.dur(A.ahora()-Date.parse(r.entrada))}</div></div>
+      <div class="meta">Entrada <span class="time">${A.hora(r.entrada)}</span>${r.dia&&r.dia!==hoy?" del "+A.esc(r.dia):""} · ${A.dur(A.ahora()-Date.parse(r.entrada))}</div></div>
       <button class="btn-out" type="button" data-id="${A.esc(r.id)}">Marcar salida</button></div>`).join("");
     L.querySelectorAll("[data-id]").forEach(b=>b.addEventListener("click",()=>salida(b.dataset.id,b)));
   }
@@ -124,12 +137,16 @@
       const {data,error}=await A.sb.rpc("marcar_entrada",{p_nombre:n,p_apellido:a,p_empresa:emp});
       if(error)throw error;
       if(!data.ok){
-        if(data.error==="abierta"){const r=data.registro;A.mensaje(msg,"warn",`${r.nombre} ${r.apellido} ya tiene una entrada abierta desde las ${A.hora(r.entrada)} en ${r.empresa}. Marca su salida en la lista de abajo.`);}
+        if(data.error==="abierta"){const r=data.registro;
+          if(tokenDe(r.id))A.mensaje(msg,"warn",`Ya tienes una entrada abierta desde las ${A.hora(r.entrada)} en ${r.empresa}. Marca tu salida abajo.`);
+          else A.mensaje(msg,"warn",`${r.nombre} ${r.apellido} ya tiene una entrada abierta desde las ${A.hora(r.entrada)} en ${r.empresa}. La salida se marca desde el celular donde se marcó la entrada. Si no es posible, pide al encargado que cierre ese turno.`);}
         else A.mensaje(msg,"err","Revisa los datos e intenta de nuevo.");
         return;
       }
       const r=data.registro;
-      A.mensaje(msg,"ok",`Entrada registrada: ${r.nombre} ${r.apellido} en ${r.empresa} a las ${A.hora(r.entrada)}.`);
+      guardarLocal([...leerLocal().filter(x=>x.id!==r.id),{id:r.id,token:data.token,nombre:r.nombre,apellido:r.apellido,empresa:r.empresa,entrada:r.entrada,dia:r.dia}]);
+      if(guardaOk)A.mensaje(msg,"ok",`Entrada registrada: ${r.nombre} ${r.apellido} en ${r.empresa} a las ${A.hora(r.entrada)}. Marca tu salida desde este mismo celular.`);
+      else A.mensaje(msg,"warn",`Entrada registrada a las ${A.hora(r.entrada)}, pero este navegador no guarda datos (¿modo incógnito?). No podrás marcar la salida desde aquí; pide al encargado que la cierre.`);
       nI.value="";aI.value="";eI.value="";[nI,aI,eI].forEach(x=>x.removeAttribute("aria-invalid"));sugerir();
       cargar();
     }catch(e){A.mensaje(msg,"err","No se pudo guardar la entrada. Revisa tu conexión a internet e intenta de nuevo.");}
@@ -141,11 +158,11 @@
       btn.classList.add("confirm");btn.textContent="Tocar otra vez para confirmar";return;}
     clearTimeout(pendiente[id]);delete pendiente[id];
     btn.disabled=true;btn.textContent="Registrando…";
-    const msg=$("msg");
+    const msg=$("msg"),tok=tokenDe(id);
     try{
-      const {data,error}=await A.sb.rpc("marcar_salida",{p_id:id});
+      const {data,error}=await A.sb.rpc("marcar_salida",{p_id:id,p_token:tok||""});
       if(error)throw error;
-      if(!data.ok){A.mensaje(msg,"warn","Esa entrada ya tenía salida registrada.");cargar();return;}
+      if(!data.ok){A.mensaje(msg,"warn","Este turno ya estaba cerrado.");cargar();return;}
       const r=data.registro;
       A.mensaje(msg,"ok",`Salida registrada: ${r.nombre} ${r.apellido} a las ${A.hora(r.salida)} · ${A.dur(Date.parse(r.salida)-Date.parse(r.entrada))}.`);
       msg.scrollIntoView({behavior:"smooth",block:"nearest"});
@@ -155,7 +172,7 @@
 
   A.sincronizar().then(tick);
   cargar();
-  setInterval(cargar,30000);
+  setInterval(cargar,60000);
   document.addEventListener("visibilitychange",()=>{if(!document.hidden){A.sincronizar();cargar();}});
 })();
 </script>

@@ -75,3 +75,7 @@ section{display:flex;flex-direction:column;gap:10px}
 .banner{background:var(--warn-bg);color:var(--warn);border-radius:12px;padding:14px;font-size:.95rem}
 .sugs{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:-4px}
 .sug{background:var(--accent-bg);color:var(--accent);border:1.5px solid color-mix(in srgb,var(--accent) 35%,transparent);font-weight:600;padding:8px 12px;font-size:.95rem;overflow-wrap:anywhere;text-align:left}
+.cerrar{flex:1 1 100%;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.cerrar label{flex:1 1 200px}
+.cerrar input{padding:9px 10px;font-size:1rem}
+.chip-m{display:inline-block;font-size:.7rem;font-weight:600;color:var(--warn);background:var(--warn-bg);border-radius:999px;padding:0 7px}

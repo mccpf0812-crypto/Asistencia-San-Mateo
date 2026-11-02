@@ -33,6 +33,13 @@
 
   <div id="panel" hidden style="display:flex;flex-direction:column;gap:22px">
     <section>
+      <h2>Turnos sin salida <span class="n" id="nAbiertos">0</span></h2>
+      <div class="note">Si alguien olvidó marcar su salida o cambió de celular, ciérrale el turno aquí con la hora real de salida. Queda marcado como "manual" en los reportes.</div>
+      <div class="msg" id="msgAb" hidden></div>
+      <div class="list" id="abiertos"></div>
+    </section>
+
+    <section>
       <div class="toolbar">
         <h2>Bitácora <span class="n" id="nDia">0</span></h2>
         <div class="filters">
@@ -119,8 +126,38 @@
   async function cargar(){
     semana=semanaDe($("fecha").value);
     registros=await traer(semana);
+    await cargarAbiertos();
     render();
   }
+  // ---------- Turnos sin salida ----------
+  const ahoraLocal=()=>{const t=A.ahora();return A.diaDe(t)+"T"+A.hora(t);};
+  const aLocal=v=>A.diaDe(v)+"T"+A.hora(v);
+  async function cargarAbiertos(){
+    const {data,error}=await A.sb.rpc("abiertos",{p_pin:pin});
+    if(error)throw error;
+    const L=$("abiertos"),lista=data||[];
+    $("nAbiertos").textContent=lista.length;
+    if(!lista.length){L.innerHTML='<div class="empty">Todos los turnos tienen salida.</div>';return;}
+    L.innerHTML=lista.map(r=>`<div class="person"><div class="who"><div class="name">${A.esc(r.nombre)} ${A.esc(r.apellido)} <span class="co">${A.esc(r.empresa)}</span></div>
+      <div class="meta">Entrada ${A.esc(fechaCorta(r.dia))} · <span class="time">${A.hora(r.entrada)}</span> · hace ${A.dur(A.ahora()-Date.parse(r.entrada))}</div></div>
+      <button class="btn-ghost" type="button" data-abrir="${A.esc(r.id)}">Cerrar turno</button>
+      <form class="cerrar" data-form="${A.esc(r.id)}" hidden>
+        <label for="sal-${A.esc(r.id)}">Hora real de salida<input type="datetime-local" id="sal-${A.esc(r.id)}" min="${aLocal(r.entrada)}" max="${ahoraLocal()}" value="${ahoraLocal()}" required></label>
+        <button class="btn-main" type="submit">Guardar salida</button>
+      </form></div>`).join("");
+    L.querySelectorAll("[data-abrir]").forEach(b=>b.addEventListener("click",()=>{const f=L.querySelector(`[data-form="${b.dataset.abrir}"]`);f.hidden=!f.hidden;if(!f.hidden)f.querySelector("input").focus();}));
+    L.querySelectorAll("form.cerrar").forEach(f=>f.addEventListener("submit",async e=>{
+      e.preventDefault();const id=f.dataset.form,v=f.querySelector("input").value,btn=f.querySelector("button");
+      if(!v){A.mensaje($("msgAb"),"err","Elige la hora de salida.");return;}
+      btn.disabled=true;
+      const {error}=await A.sb.rpc("cerrar_turno",{p_pin:pin,p_id:id,p_salida:v+":00-06:00"});
+      btn.disabled=false;
+      if(error){A.mensaje($("msgAb"),"err",/futuro|antes de la entrada|cerrado/.test(error.message)?error.message+".":"No se pudo cerrar el turno. Intenta de nuevo.");return;}
+      A.mensaje($("msgAb"),"ok","Turno cerrado.");
+      cargar().catch(()=>{});
+    }));
+  }
+
   $("fecha").addEventListener("change",()=>{if(!semana.includes($("fecha").value))cargar().catch(()=>A.mensaje($("msgRep"),"err","No se pudo cargar la fecha."));else render();});
   $("filtroEmpresa").addEventListener("change",render);
   $("btnRecargar").addEventListener("click",()=>cargar().catch(()=>A.mensaje($("msgRep"),"err","No se pudo actualizar.")));
@@ -146,7 +183,7 @@
       '<div class="log"><div class="logrow head"><span>Persona</span><span>Entrada</span><span>Salida</span><span class="dur">Tiempo</span></div>'+
       dia.map(r=>`<div class="logrow"><div class="cell"><span class="name">${A.esc(r.nombre)} ${A.esc(r.apellido)}</span><span class="co">${A.esc(r.empresa)}</span></div>
         <div class="cell"><span class="time">${A.hora(r.entrada)}</span></div>
-        <div class="cell">${r.salida?`<span class="time">${A.hora(r.salida)}</span>${A.diaDe(r.salida)!==r.dia?'<span class="meta">'+A.esc(A.diaDe(r.salida))+'</span>':""}`:'<span class="open">sin salida</span>'}</div>
+        <div class="cell">${r.salida?`<span class="time">${A.hora(r.salida)}</span>${r.salida_manual?'<span class="chip-m">manual</span>':""}${A.diaDe(r.salida)!==r.dia?'<span class="meta">'+A.esc(A.diaDe(r.salida))+'</span>':""}`:'<span class="open">sin salida</span>'}</div>
         <div class="cell dur"><span class="time">${r.salida?A.dur(durMs(r)):"—"}</span></div></div>`).join("")+'</div>';
 
     const emp=filtro()?" · "+filtro():"";
@@ -159,9 +196,10 @@
   function filaDetalle(r){
     return {"Fecha":r.dia,"Día":diaSemana(r.dia),"Nombre":r.nombre,"Apellido":r.apellido,"Empresa":r.empresa,
       "Entrada":A.hora(r.entrada),"Salida":r.salida?A.hora(r.salida):"Sin salida",
-      "Fecha salida":r.salida?A.diaDe(r.salida):"","Horas":r.salida?A.horas(durMs(r)):""};
+      "Fecha salida":r.salida?A.diaDe(r.salida):"","Horas":r.salida?A.horas(durMs(r)):"",
+      "Salida manual":r.salida?(r.salida_manual?"Sí":"No"):""};
   }
-  const anchoDet=[11,10,16,16,24,8,10,12,7].map(w=>({wch:w}));
+  const anchoDet=[11,10,16,16,24,8,10,12,7,13].map(w=>({wch:w}));
   function hoja(filas,cols,titulo){
     const ws=XLSX.utils.aoa_to_sheet([[titulo],["Horas tomadas del servidor (hora de Guatemala)"]]);
     XLSX.utils.sheet_add_json(ws,filas,{origin:"A4"});ws["!cols"]=cols;return ws;
